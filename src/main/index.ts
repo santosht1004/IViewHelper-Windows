@@ -3,6 +3,7 @@ import { createStealthWindow } from './window'
 import { registerIpcHandlers } from './ipc-handlers'
 import { registerShortcuts, unregisterShortcuts } from './shortcuts'
 import { createTray } from './tray'
+import { onUnlock } from './auth'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -14,8 +15,12 @@ app.whenReady().then(() => {
 
   mainWindow = createStealthWindow()
   registerIpcHandlers(mainWindow)
-  registerShortcuts(mainWindow)
   createTray(mainWindow)
+
+  // Global shortcuts stay off until the launch password is accepted.
+  onUnlock(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) registerShortcuts(mainWindow)
+  })
 })
 
 app.on('window-all-closed', () => {

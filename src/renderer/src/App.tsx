@@ -1,5 +1,6 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 import { TitleBar } from './components/TitleBar'
+import { LockScreen } from './components/LockScreen'
 import { ControlBar } from './components/Controls/ControlBar'
 import { ChatPanel } from './components/Chat/ChatPanel'
 import { SettingsPanel } from './components/Settings/SettingsPanel'
@@ -11,10 +12,12 @@ import { useChatStore } from './stores/chatStore'
 export default function App() {
   const loadSettings = useSettingsStore(s => s.loadSettings)
   const loaded = useSettingsStore(s => s.loaded)
+  const [unlocked, setUnlocked] = useState(false)
 
+  // Settings live behind the launch password; only load them once unlocked.
   useEffect(() => {
-    loadSettings()
-  }, [loadSettings])
+    if (unlocked) loadSettings()
+  }, [unlocked, loadSettings])
 
   const handleTranscript = useCallback((text: string) => {
     window.dispatchEvent(new CustomEvent('speech-transcript', { detail: text }))
@@ -32,6 +35,7 @@ export default function App() {
 
   // Global keyboard shortcuts from main process
   useEffect(() => {
+    if (!unlocked) return
     const unsubMic = window.electronAPI.onToggleMic(() => {
       const isListening = useSpeechStore.getState().isListening
       handleMicToggle(!isListening)
@@ -56,7 +60,11 @@ export default function App() {
       unsubScreenshot()
       unsubClear()
     }
-  }, [handleMicToggle])
+  }, [unlocked, handleMicToggle])
+
+  if (!unlocked) {
+    return <LockScreen onUnlocked={() => setUnlocked(true)} />
+  }
 
   if (!loaded) {
     return (

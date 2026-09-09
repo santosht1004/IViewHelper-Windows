@@ -35,8 +35,8 @@ export async function streamChat(
 
   // Groq vision is only supported on specific models
   const GROQ_VISION_MODELS = [
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'meta-llama/llama-4-maverick-17b-128e-instruct'
+    'qwen/qwen3.6-27b',
+    'qwen/qwen3.8-27b'
   ]
   const supportsVision = payload.provider !== 'groq' || GROQ_VISION_MODELS.includes(payload.model)
 
@@ -96,7 +96,7 @@ export async function transcribeAudio(
   const file = await toFile(buffer, 'audio.webm', { type: 'audio/webm' })
 
   const response = await openai.audio.transcriptions.create({
-    model: provider === 'groq' ? 'whisper-large-v3' : 'whisper-1',
+    model: provider === 'groq' ? 'whisper-large-v3-turbo' : 'whisper-1',
     file,
     language: 'en',
     response_format: 'text',

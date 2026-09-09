@@ -4,6 +4,8 @@ directories:
   buildResources: build
   output: dist
 
+afterPack: build/afterPack.cjs
+
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -29,7 +31,8 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: '${name}-${version}.${ext}'
+        - arm64
+  artifactName: '${name}-${version}-${arch}.${ext}'
   signAndEditExecutable: false
 
 linux:

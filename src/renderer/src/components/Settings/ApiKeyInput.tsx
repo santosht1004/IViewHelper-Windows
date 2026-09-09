@@ -4,6 +4,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 
 export function ApiKeyInput() {
   const apiKey = useSettingsStore(s => s.apiKey)
+  const provider = useSettingsStore(s => s.provider)
   const setApiKey = useSettingsStore(s => s.setApiKey)
   const [visible, setVisible] = useState(false)
 
@@ -11,14 +12,14 @@ export function ApiKeyInput() {
     <div>
       <label className="flex items-center gap-1.5 text-xs mb-2 font-medium" style={{ color: 'var(--text-secondary)' }}>
         <Key size={12} />
-        OpenAI API Key
+        {provider === 'groq' ? 'Groq' : 'OpenAI'} API Key
       </label>
       <div className="flex items-center gap-1.5">
         <input
           type={visible ? 'text' : 'password'}
           value={apiKey}
           onChange={e => setApiKey(e.target.value)}
-          placeholder="sk-..."
+          placeholder={provider === 'groq' ? 'gsk_...' : 'sk-...'}
           className="flex-1 text-xs px-3 py-2 rounded-lg outline-none focus:ring-1 focus:ring-indigo-500/50"
           style={{
             background: 'var(--bg-tertiary)',

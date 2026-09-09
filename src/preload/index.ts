@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 const api = {
+  // Launch password
+  verifyPassword: (password: string): Promise<{ ok: boolean; remaining: number }> =>
+    ipcRenderer.invoke('verify-password', password),
+  isUnlocked: (): Promise<boolean> => ipcRenderer.invoke('is-unlocked'),
+
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
   close: () => ipcRenderer.send('window-close'),

@@ -19,16 +19,12 @@ const MODELS: Record<Provider, Array<{ id: string; name: string }>> = {
     { id: 'o1', name: 'o1' },
   ],
   groq: [
-    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout (Vision)' },
-    { id: 'meta-llama/llama-4-maverick-17b-128e-instruct', name: 'Llama 4 Maverick (Vision)' },
+    { id: 'qwen/qwen3.6-27b', name: 'Qwen 3.6 27B (Vision)' },
+    { id: 'qwen/qwen3.8-27b', name: 'Qwen 3.8 27B (Vision)' },
+    { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
+    { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B' },
     { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
     { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B' },
-    { id: 'llama3-70b-8192', name: 'Llama 3 70B' },
-    { id: 'llama3-8b-8192', name: 'Llama 3 8B' },
-    { id: 'gemma2-9b-it', name: 'Gemma 2 9B' },
-    { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
-    { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 70B' },
-    { id: 'qwen-qwq-32b', name: 'Qwen QWQ 32B' },
   ]
 }
 
