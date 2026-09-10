@@ -16,6 +16,7 @@ export function MessageInput({ onSend }: Props) {
   const clearScreenshots = useChatStore(s => s.clearScreenshots)
   const apiKey = useSettingsStore(s => s.apiKey)
   const interimTranscript = useSpeechStore(s => s.interimTranscript)
+  const speechError = useSpeechStore(s => s.error)
 
   // Listen for speech transcripts from useSpeechRecognition
   useEffect(() => {
@@ -104,13 +105,22 @@ export function MessageInput({ onSend }: Props) {
       className="px-4 py-3.5"
       style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--border)' }}
     >
-      {/* Interim transcript preview */}
-      {interimTranscript && (
+      {/* Speech error or interim transcript status */}
+      {speechError && (
         <div
-          className="text-xs mb-2 px-2 py-1 rounded-lg italic"
+          className="text-xs mb-2 px-2.5 py-1.5 rounded-lg flex items-center justify-between"
+          style={{ color: '#ef4444', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}
+        >
+          <span>⚠️ {speechError}</span>
+        </div>
+      )}
+
+      {interimTranscript && !speechError && (
+        <div
+          className="text-xs mb-2 px-2.5 py-1 rounded-lg flex items-center gap-1.5 animate-pulse"
           style={{ color: 'var(--accent)', background: 'var(--accent-glow)' }}
         >
-          {interimTranscript}
+          <span>{interimTranscript}</span>
         </div>
       )}
 

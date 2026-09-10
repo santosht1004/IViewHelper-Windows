@@ -50,7 +50,8 @@ const api = {
   // Settings
   getSettings: (): Promise<{
     apiKey: string;
-    provider: 'openai' | 'groq';
+    apiKeys?: Record<string, string>;
+    provider: 'openai' | 'groq' | 'gemini';
     model: string;
     opacity: number;
     fontSize: number;

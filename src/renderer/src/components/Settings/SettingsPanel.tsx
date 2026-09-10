@@ -23,7 +23,8 @@ export function SettingsPanel() {
 
   const PROVIDERS = [
     { value: 'openai' as const, label: 'OpenAI' },
-    { value: 'groq' as const, label: 'Groq' }
+    { value: 'groq' as const, label: 'Groq' },
+    { value: 'gemini' as const, label: 'Gemini' }
   ]
 
   if (!showSettings) return null

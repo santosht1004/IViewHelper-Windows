@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { captureScreen } from './screenshot'
 import { streamChat, transcribeAudio } from './openai'
+import { streamGeminiChat, transcribeGeminiAudio } from './gemini'
 import { store, getSystemPrompts, saveSystemPrompt, deleteSystemPrompt } from './store'
 import { isUnlocked, verifyPassword } from './auth'
 
@@ -39,7 +40,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return captureScreen(mainWindow)
   }))
 
-  // OpenAI chat
+  // Chat
   ipcMain.handle('openai-chat', locked(async (_event, payload: {
     messages: Array<{ role: string; content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
     model: string;
@@ -48,23 +49,38 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     provider: string;
     reasoningEffort: 'off' | 'minimal' | 'low' | 'medium' | 'high';
   }) => {
+    if (payload.provider === 'gemini') {
+      return streamGeminiChat(mainWindow, payload)
+    }
     return streamChat(mainWindow, payload)
   }))
 
-  // OpenAI Whisper STT
+  // Whisper / Gemini STT
   ipcMain.handle('whisper-transcribe', locked(async (_event, payload: {
     audioBuffer: ArrayBuffer;
     apiKey: string;
     provider: string;
   }) => {
+    if (payload.provider === 'gemini') {
+      return transcribeGeminiAudio(payload.audioBuffer, payload.apiKey)
+    }
     return transcribeAudio(payload.audioBuffer, payload.apiKey, payload.provider)
   }))
 
   // Settings
   ipcMain.handle('get-settings', locked(() => {
+    const provider = store.get('provider', 'openai')
+    const legacyKey = store.get('apiKey', '')
+    const savedApiKeys = store.get('apiKeys', {
+      openai: provider === 'openai' ? legacyKey : '',
+      groq: provider === 'groq' ? legacyKey : '',
+      gemini: provider === 'gemini' ? legacyKey : ''
+    })
+
     return {
-      apiKey: store.get('apiKey', ''),
-      provider: store.get('provider', 'openai'),
+      apiKey: savedApiKeys[provider] || legacyKey,
+      apiKeys: savedApiKeys,
+      provider,
       model: store.get('model', 'gpt-5.4'),
       opacity: store.get('opacity', 0.95),
       fontSize: store.get('fontSize', 14),

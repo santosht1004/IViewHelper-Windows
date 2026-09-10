@@ -12,14 +12,14 @@ export function ApiKeyInput() {
     <div>
       <label className="flex items-center gap-1.5 text-xs mb-2 font-medium" style={{ color: 'var(--text-secondary)' }}>
         <Key size={12} />
-        {provider === 'groq' ? 'Groq' : 'OpenAI'} API Key
+        {provider === 'groq' ? 'Groq' : provider === 'gemini' ? 'Google Gemini' : 'OpenAI'} API Key
       </label>
       <div className="flex items-center gap-1.5">
         <input
           type={visible ? 'text' : 'password'}
           value={apiKey}
           onChange={e => setApiKey(e.target.value)}
-          placeholder={provider === 'groq' ? 'gsk_...' : 'sk-...'}
+          placeholder={provider === 'groq' ? 'gsk_...' : provider === 'gemini' ? 'AIzaSy...' : 'sk-...'}
           className="flex-1 text-xs px-3 py-2 rounded-lg outline-none focus:ring-1 focus:ring-indigo-500/50"
           style={{
             background: 'var(--bg-tertiary)',

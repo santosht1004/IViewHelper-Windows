@@ -3,6 +3,7 @@ import type { SystemPrompt, STTProvider, ReasoningEffort, Provider } from '../li
 
 interface SettingsState {
   apiKey: string
+  apiKeys: Record<Provider, string>
   provider: Provider
   model: string
   opacity: number
@@ -35,6 +36,11 @@ function applyFontSize(size: number) {
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiKey: '',
+  apiKeys: {
+    openai: '',
+    groq: '',
+    gemini: ''
+  },
   provider: 'openai',
   model: 'gpt-5.4',
   opacity: 0.95,
@@ -51,9 +57,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const prompts = await window.electronAPI.getSystemPrompts()
     const fontSize = settings.fontSize ?? 14
     applyFontSize(fontSize)
+    const currentProvider = (settings.provider ?? 'openai') as Provider
+    const savedApiKeys: Record<Provider, string> = {
+      openai: settings.apiKeys?.openai || (currentProvider === 'openai' ? settings.apiKey : ''),
+      groq: settings.apiKeys?.groq || (currentProvider === 'groq' ? settings.apiKey : ''),
+      gemini: settings.apiKeys?.gemini || (currentProvider === 'gemini' ? settings.apiKey : '')
+    }
+    const currentApiKey = savedApiKeys[currentProvider] || settings.apiKey || ''
+
     set({
-      apiKey: settings.apiKey,
-      provider: settings.provider ?? 'openai',
+      apiKey: currentApiKey,
+      apiKeys: savedApiKeys,
+      provider: currentProvider,
       model: settings.model,
       opacity: settings.opacity,
       fontSize,
@@ -67,13 +82,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setApiKey: (key) => {
-    set({ apiKey: key })
-    window.electronAPI.saveSettings({ apiKey: key })
+    const currentProvider = get().provider
+    const updatedApiKeys = { ...get().apiKeys, [currentProvider]: key }
+    set({ apiKey: key, apiKeys: updatedApiKeys })
+    window.electronAPI.saveSettings({ apiKey: key, apiKeys: updatedApiKeys })
   },
 
   setProvider: (provider) => {
-    set({ provider })
-    window.electronAPI.saveSettings({ provider })
+    const nextApiKey = get().apiKeys[provider] || ''
+    set({ provider, apiKey: nextApiKey })
+    window.electronAPI.saveSettings({ provider, apiKey: nextApiKey })
   },
 
   setModel: (model) => {

@@ -35,10 +35,10 @@ export async function streamChat(
 
   // Groq vision is only supported on specific models
   const GROQ_VISION_MODELS = [
-    'qwen/qwen3.6-27b',
-    'qwen/qwen3.8-27b'
+    'llama-3.2-11b-vision-preview',
+    'llama-3.2-90b-vision-preview'
   ]
-  const supportsVision = payload.provider !== 'groq' || GROQ_VISION_MODELS.includes(payload.model)
+  const supportsVision = payload.provider !== 'groq' || GROQ_VISION_MODELS.includes(payload.model) || /vision/i.test(payload.model)
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = []
 
@@ -61,7 +61,7 @@ export async function streamChat(
   }
 
   try {
-    const isReasoningModel = /^(o\d|gpt-5)/.test(payload.model)
+    const isReasoningModel = payload.provider === 'openai' && /^(o\d|gpt-5)/.test(payload.model)
     const sendReasoning = isReasoningModel && payload.reasoningEffort !== 'off'
 
     const stream = await openai.chat.completions.create({
@@ -136,7 +136,7 @@ const HALLUCINATIONS = new Set([
   'um'
 ])
 
-function filterHallucinations(text: string): string {
+export function filterHallucinations(text: string): string {
   if (!text) return ''
   const normalized = text
     .toLowerCase()

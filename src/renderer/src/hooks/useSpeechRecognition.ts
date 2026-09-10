@@ -2,108 +2,157 @@ import { useRef, useCallback, useEffect } from 'react'
 import { useSpeechStore } from '../stores/speechStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
-// Speech-level RMS threshold. Background noise typically <0.01, speech 0.05+.
-// Below this, we skip the Whisper call entirely to avoid hallucinations.
-const SPEECH_RMS_THRESHOLD = 0.01
+// Lower threshold to capture soft voices & speaker audio in live calls
+const SPEECH_RMS_THRESHOLD = 0.003
 
 export function useSpeechRecognition(onTranscript: (text: string) => void) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const whisperIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldListenRef = useRef(false)
   const onTranscriptRef = useRef(onTranscript)
   onTranscriptRef.current = onTranscript
 
-  // Starts a fresh MediaRecorder session, records for ~4s, stops it to produce
-  // a complete WebM file (with headers), sends to Whisper, then loops.
   const streamRef = useRef<MediaStream | null>(null)
   const mimeTypeRef = useRef<string>('audio/webm')
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  const isTranscribingRef = useRef(false)
+
+  const processAudioChunk = useCallback(async (blob: Blob) => {
+    const apiKey = useSettingsStore.getState().apiKey
+    const provider = useSettingsStore.getState().provider
+
+    if (!apiKey) {
+      useSpeechStore.getState().setError(`API key required for ${provider.toUpperCase()}`)
+      useSpeechStore.getState().setInterimTranscript('')
+      return
+    }
+
+    try {
+      isTranscribingRef.current = true
+      useSpeechStore.getState().setInterimTranscript('⚡ Transcribing...')
+      const buffer = await blob.arrayBuffer()
+      const transcript = await window.electronAPI.whisperTranscribe(buffer, apiKey, provider)
+
+      if (transcript && transcript.trim()) {
+        useSpeechStore.getState().setError(null)
+        onTranscriptRef.current(transcript.trim())
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Transcription failed'
+      console.error('Speech transcription error:', err)
+      useSpeechStore.getState().setError(errorMsg)
+    } finally {
+      isTranscribingRef.current = false
+      if (shouldListenRef.current) {
+        useSpeechStore.getState().setInterimTranscript('')
+      }
+    }
+  }, [])
 
   const recordAndTranscribe = useCallback(() => {
     const stream = streamRef.current
     if (!stream || !shouldListenRef.current) return
 
     const mimeType = mimeTypeRef.current
-    const recorder = new MediaRecorder(stream, { mimeType })
+    let recorder: MediaRecorder
+    try {
+      recorder = new MediaRecorder(stream, { mimeType })
+    } catch {
+      recorder = new MediaRecorder(stream)
+    }
+
     mediaRecorderRef.current = recorder
     const chunks: Blob[] = []
 
-    // Sample audio energy during the recording window for VAD.
     const analyser = analyserRef.current
     const sampleBuffer = analyser ? new Float32Array(analyser.fftSize) : null
-    let maxRms = 0
-    const rmsTimer = analyser && sampleBuffer
-      ? setInterval(() => {
-          analyser.getFloatTimeDomainData(sampleBuffer)
-          let sum = 0
-          for (let i = 0; i < sampleBuffer.length; i++) {
-            sum += sampleBuffer[i] * sampleBuffer[i]
-          }
-          const rms = Math.sqrt(sum / sampleBuffer.length)
-          if (rms > maxRms) maxRms = rms
-        }, 100)
-      : null
+    let hasSpeech = false
+    let lastSpeechTime = 0
+    const chunkStartTime = Date.now()
 
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data)
+      if (e.data && e.data.size > 0) {
+        chunks.push(e.data)
+      }
     }
 
-    recorder.onstop = async () => {
-      if (rmsTimer) clearInterval(rmsTimer)
-
-      // Build a complete file from this recording session
-      const blob = new Blob(chunks, { type: mimeType })
-
-      // Skip if no speech-level audio detected (VAD) — prevents Whisper hallucinations
-      // on silence/background noise like "Thank you", "Thanks for watching", etc.
-      if (maxRms < SPEECH_RMS_THRESHOLD || blob.size < 1000) {
-        if (shouldListenRef.current) recordAndTranscribe()
-        return
+    recorder.onstop = () => {
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current)
+        vadIntervalRef.current = null
       }
 
-      const buffer = await blob.arrayBuffer()
-      const apiKey = useSettingsStore.getState().apiKey
-      const provider = useSettingsStore.getState().provider
-
-      if (!apiKey) {
-        useSpeechStore.getState().setError('API key required for Whisper')
-        return
+      // Immediately start next recording cycle so no speech is missed
+      if (shouldListenRef.current) {
+        recordAndTranscribe()
       }
 
-      try {
-        const transcript = await window.electronAPI.whisperTranscribe(buffer, apiKey, provider)
-        if (transcript && transcript.trim()) {
-          onTranscriptRef.current(transcript.trim())
+      // Process finished chunk if speech was detected
+      if (hasSpeech && chunks.length > 0) {
+        const blob = new Blob(chunks, { type: mimeType })
+        if (blob.size > 500) {
+          processAudioChunk(blob)
         }
-      } catch (err) {
-        console.error('Whisper transcription error:', err)
       }
-
-      // Start next cycle
-      if (shouldListenRef.current) recordAndTranscribe()
     }
 
-    recorder.start()
+    // Monitor speech energy in real-time
+    if (analyser && sampleBuffer) {
+      vadIntervalRef.current = setInterval(() => {
+        if (recorder.state !== 'recording') return
 
-    // Stop after 6 seconds to flush a complete file
-    whisperIntervalRef.current = setTimeout(() => {
-      if (recorder.state === 'recording') {
-        recorder.stop()
-      }
-    }, 6000)
-  }, [])
+        analyser.getFloatTimeDomainData(sampleBuffer)
+        let sum = 0
+        for (let i = 0; i < sampleBuffer.length; i++) {
+          sum += sampleBuffer[i] * sampleBuffer[i]
+        }
+        const rms = Math.sqrt(sum / sampleBuffer.length)
+        const now = Date.now()
+        const chunkDuration = now - chunkStartTime
+
+        if (rms >= SPEECH_RMS_THRESHOLD) {
+          hasSpeech = true
+          lastSpeechTime = now
+          if (!isTranscribingRef.current) {
+            useSpeechStore.getState().setInterimTranscript('🎙️ Listening...')
+          }
+        }
+
+        // Finalize chunk if user paused after speaking, or chunk reached max duration (7s)
+        if (hasSpeech) {
+          const silenceDuration = now - lastSpeechTime
+          if ((silenceDuration >= 1100 && chunkDuration >= 1200) || chunkDuration >= 7000) {
+            recorder.stop()
+          }
+        } else if (chunkDuration >= 3500) {
+          // No speech in this interval, recycle chunk
+          recorder.stop()
+        }
+      }, 100)
+    }
+
+    recorder.start(250)
+  }, [processAudioChunk])
 
   const startWhisper = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
-      })
+      // Audio constraints tailored for live calls & system speakers:
+      // echoCancellation=false avoids filtering out remote participants on speaker output
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: true
+          }
+        })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
 
       streamRef.current = stream
 
@@ -113,8 +162,6 @@ export function useSpeechRecognition(onTranscript: (text: string) => void) {
           ? 'audio/webm'
           : 'audio/mp4'
 
-      // Set up VAD: tap the same MediaStream into an AnalyserNode so we can
-      // measure RMS energy in parallel with MediaRecorder.
       const audioContext = new AudioContext()
       const source = audioContext.createMediaStreamSource(stream)
       const analyser = audioContext.createAnalyser()
@@ -149,7 +196,11 @@ export function useSpeechRecognition(onTranscript: (text: string) => void) {
     useSpeechStore.getState().setListening(false)
     useSpeechStore.getState().setInterimTranscript('')
 
-    // Stop Whisper recording
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current)
+      vadIntervalRef.current = null
+    }
+
     if (mediaRecorderRef.current) {
       try {
         if (mediaRecorderRef.current.state === 'recording') {
@@ -159,23 +210,16 @@ export function useSpeechRecognition(onTranscript: (text: string) => void) {
       mediaRecorderRef.current = null
     }
 
-    // Stop mic stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
 
-    // Tear down VAD audio graph
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {})
       audioContextRef.current = null
     }
     analyserRef.current = null
-
-    if (whisperIntervalRef.current) {
-      clearInterval(whisperIntervalRef.current)
-      whisperIntervalRef.current = null
-    }
   }, [])
 
   // Cleanup on unmount
