@@ -5,3 +5,4 @@ dist/
 *.dmg
 *.exe
 *.nsis
+.DS_Store

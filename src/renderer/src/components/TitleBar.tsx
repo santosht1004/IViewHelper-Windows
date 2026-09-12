@@ -9,7 +9,7 @@ export function TitleBar() {
     <div
       className="flex items-center justify-between px-4 py-3 select-none"
       style={{
-        WebkitAppRegion: 'drag' as unknown as string,
+        WebkitAppRegion: 'drag',
         background: 'linear-gradient(180deg, rgba(99,102,241,0.08) 0%, transparent 100%)',
         borderBottom: '1px solid var(--border)'
       }}
@@ -26,7 +26,7 @@ export function TitleBar() {
         </span>
       </div>
 
-      <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' as unknown as string }}>
+      <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' }}>
         <button
           onClick={() => setShowSettings(!showSettings)}
           className="p-1.5 rounded-md transition-colors hover:bg-white/8"

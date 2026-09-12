@@ -1,27 +1,25 @@
 import Store from 'electron-store'
 import { randomUUID } from 'crypto'
-
-interface SystemPrompt {
-  id: string
-  name: string
-  content: string
-  isDefault: boolean
-  createdAt: number
-  updatedAt: number
-}
+import type { AlibabaRegion, Provider, ReasoningEffort, STTProvider, SystemPrompt } from '../shared/ipc'
+import { INITIAL_LOCKOUT_STATE, type LockoutState } from './lockout'
 
 interface StoreSchema {
-  apiKey: string
-  apiKeys: Record<string, string>
-  provider: 'openai' | 'groq' | 'gemini'
+  // Legacy plaintext keys; migrated into secureApiKeys by migrateLegacyApiKeys().
+  apiKey?: string
+  apiKeys?: Record<string, string>
+  // Values are "enc:<base64>" (safeStorage) or "plain:<key>" when OS encryption is unavailable.
+  secureApiKeys: Partial<Record<Provider, string>>
+  provider: Provider
+  alibabaRegion: AlibabaRegion
   model: string
   opacity: number
   fontSize: number
-  sttProvider: 'whisper'
-  reasoningEffort: 'off' | 'minimal' | 'low' | 'medium' | 'high'
+  sttProvider: STTProvider
+  reasoningEffort: ReasoningEffort
   activeSystemPromptId: string | null
   systemPrompts: SystemPrompt[]
   windowBounds: { x: number; y: number; width: number; height: number } | null
+  authState: LockoutState
 }
 
 const defaultPrompts: SystemPrompt[] = [
@@ -81,13 +79,9 @@ Rules:
 
 export const store = new Store<StoreSchema>({
   defaults: {
-    apiKey: '',
-    apiKeys: {
-      openai: '',
-      groq: '',
-      gemini: ''
-    },
+    secureApiKeys: {},
     provider: 'openai',
+    alibabaRegion: 'singapore',
     model: 'gpt-5.4',
     opacity: 0.95,
     fontSize: 14,
@@ -95,7 +89,8 @@ export const store = new Store<StoreSchema>({
     reasoningEffort: 'medium',
     activeSystemPromptId: 'default-general',
     systemPrompts: defaultPrompts,
-    windowBounds: null
+    windowBounds: null,
+    authState: INITIAL_LOCKOUT_STATE
   }
 })
 

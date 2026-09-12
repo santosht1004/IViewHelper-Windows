@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { Provider } from '../../lib/types'
 
@@ -36,6 +37,10 @@ const MODELS: Record<Provider, Array<{ id: string; name: string }>> = {
     { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
     { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
     { id: 'gemini-pro-latest', name: 'Gemini Pro Latest' },
+  ],
+  // One omni model covers text, screenshots, and mic transcription.
+  alibaba: [
+    { id: 'qwen3.5-omni-flash', name: 'Qwen3.5 Omni Flash' },
   ]
 }
 
@@ -47,9 +52,10 @@ export function ModelSelector() {
   const models = MODELS[provider] || MODELS.openai
   const validModel = models.some(m => m.id === model) ? model : models[0].id
 
-  if (validModel !== model) {
-    setModel(validModel)
-  }
+  // Persist the fallback after render; updating the store during render triggers React warnings.
+  useEffect(() => {
+    if (validModel !== model) setModel(validModel)
+  }, [validModel, model, setModel])
 
   return (
     <select

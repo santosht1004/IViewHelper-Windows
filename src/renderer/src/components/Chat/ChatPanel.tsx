@@ -4,6 +4,7 @@ import { MessageInput } from './MessageInput'
 import { ImagePreview } from './ImagePreview'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import type { ChatMessagePayload } from '../../../../shared/ipc'
 
 export function ChatPanel() {
   const addUserMessage = useChatStore(s => s.addUserMessage)
@@ -11,8 +12,6 @@ export function ChatPanel() {
   const appendStreamChunk = useChatStore(s => s.appendStreamChunk)
   const finalizeStream = useChatStore(s => s.finalizeStream)
   const setStreamError = useChatStore(s => s.setStreamError)
-  const messages = useChatStore(s => s.messages)
-  const apiKey = useSettingsStore(s => s.apiKey)
   const provider = useSettingsStore(s => s.provider)
   const model = useSettingsStore(s => s.model)
   const reasoningEffort = useSettingsStore(s => s.reasoningEffort)
@@ -20,14 +19,14 @@ export function ChatPanel() {
 
   // Set up stream listeners
   useEffect(() => {
-    const unsubChunk = window.electronAPI.onStreamChunk((chunk) => {
-      appendStreamChunk(chunk)
+    const unsubChunk = window.electronAPI.onStreamChunk((requestId, chunk) => {
+      appendStreamChunk(requestId, chunk)
     })
-    const unsubDone = window.electronAPI.onStreamDone(() => {
-      finalizeStream()
+    const unsubDone = window.electronAPI.onStreamDone((requestId) => {
+      finalizeStream(requestId)
     })
-    const unsubError = window.electronAPI.onStreamError((error) => {
-      setStreamError(error)
+    const unsubError = window.electronAPI.onStreamError((requestId, error) => {
+      setStreamError(requestId, error)
     })
 
     return () => {
@@ -42,9 +41,9 @@ export function ChatPanel() {
     addUserMessage(content, screenshots)
 
     // Build messages for API
-    const apiMessages = [...useChatStore.getState().messages].map(msg => {
+    const apiMessages = useChatStore.getState().messages.map((msg): ChatMessagePayload => {
       if (msg.role === 'user' && msg.screenshots.length > 0) {
-        const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
+        const contentParts: Exclude<ChatMessagePayload['content'], string> = []
         if (msg.content) {
           contentParts.push({ type: 'text', text: msg.content })
         }
@@ -56,16 +55,21 @@ export function ChatPanel() {
       return { role: msg.role, content: msg.content }
     })
 
-    startStream()
+    const requestId = startStream()
 
-    await window.electronAPI.sendChat({
-      messages: apiMessages,
-      model,
-      systemPrompt: getActivePromptContent(),
-      apiKey,
-      provider,
-      reasoningEffort
-    })
+    try {
+      await window.electronAPI.sendChat({
+        requestId,
+        messages: apiMessages,
+        model,
+        systemPrompt: getActivePromptContent(),
+        provider,
+        reasoningEffort
+      })
+    } catch (err) {
+      // The invoke itself failed (e.g. rejected request), so no stream event will arrive.
+      setStreamError(requestId, err instanceof Error ? err.message : 'Failed to send message')
+    }
   }
 
   return (

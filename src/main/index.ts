@@ -4,14 +4,16 @@ import { registerIpcHandlers } from './ipc-handlers'
 import { registerShortcuts, unregisterShortcuts } from './shortcuts'
 import { createTray } from './tray'
 import { onUnlock } from './auth'
+import { migrateLegacyApiKeys } from './secrets'
 
 let mainWindow: BrowserWindow | null = null
 
 app.whenReady().then(() => {
   // Hide from dock on macOS
-  if (process.platform === 'darwin') {
-    app.dock.hide()
-  }
+  app.dock?.hide()
+
+  // safeStorage is only usable after 'ready'.
+  migrateLegacyApiKeys()
 
   mainWindow = createStealthWindow()
   registerIpcHandlers(mainWindow)
@@ -31,8 +33,10 @@ app.on('will-quit', () => {
   unregisterShortcuts()
 })
 
+// IPC handlers, the tray, and shortcuts are bound to the single main window, and the
+// app quits when it closes, so re-activation just brings that window back.
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    mainWindow = createStealthWindow()
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+    mainWindow.showInactive()
   }
 })

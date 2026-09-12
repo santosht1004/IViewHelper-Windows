@@ -1,10 +1,24 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  AuthStatus,
+  ChatRequest,
+  Provider,
+  Settings,
+  SettingsUpdate,
+  SystemPrompt,
+  UnlockResult
+} from '../shared/ipc'
+
+function subscribe<A extends unknown[]>(channel: string, callback: (...args: A) => void): () => void {
+  const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => callback(...(args as A))
+  ipcRenderer.on(channel, handler)
+  return () => ipcRenderer.removeListener(channel, handler)
+}
 
 const api = {
   // Launch password
-  verifyPassword: (password: string): Promise<{ ok: boolean; remaining: number }> =>
-    ipcRenderer.invoke('verify-password', password),
-  isUnlocked: (): Promise<boolean> => ipcRenderer.invoke('is-unlocked'),
+  verifyPassword: (password: string): Promise<UnlockResult> => ipcRenderer.invoke('verify-password', password),
+  getAuthStatus: (): Promise<AuthStatus> => ipcRenderer.invoke('auth-status'),
 
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
@@ -15,110 +29,40 @@ const api = {
   // Screenshot
   captureScreenshot: (): Promise<string> => ipcRenderer.invoke('capture-screenshot'),
 
-  // OpenAI chat
-  sendChat: (payload: {
-    messages: Array<{ role: string; content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
-    model: string;
-    systemPrompt: string;
-    apiKey: string;
-    provider: string;
-    reasoningEffort: 'off' | 'minimal' | 'low' | 'medium' | 'high';
-  }): Promise<void> => ipcRenderer.invoke('openai-chat', payload),
+  // Chat. Stream events carry the request id so stale or cancelled streams can be ignored.
+  sendChat: (request: ChatRequest): Promise<void> => ipcRenderer.invoke('chat-send', request),
+  cancelChat: (requestId: string) => ipcRenderer.send('chat-cancel', requestId),
+  onStreamChunk: (callback: (requestId: string, chunk: string) => void) =>
+    subscribe('chat-stream-chunk', callback),
+  onStreamDone: (callback: (requestId: string) => void) => subscribe('chat-stream-done', callback),
+  onStreamError: (callback: (requestId: string, error: string) => void) =>
+    subscribe('chat-stream-error', callback),
 
-  onStreamChunk: (callback: (chunk: string) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, chunk: string) => callback(chunk)
-    ipcRenderer.on('openai-stream-chunk', handler)
-    return () => ipcRenderer.removeListener('openai-stream-chunk', handler)
-  },
-
-  onStreamDone: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('openai-stream-done', handler)
-    return () => ipcRenderer.removeListener('openai-stream-done', handler)
-  },
-
-  onStreamError: (callback: (error: string) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, error: string) => callback(error)
-    ipcRenderer.on('openai-stream-error', handler)
-    return () => ipcRenderer.removeListener('openai-stream-error', handler)
-  },
-
-  // Whisper STT
-  whisperTranscribe: (audioBuffer: ArrayBuffer, apiKey: string, provider: string): Promise<string> =>
-    ipcRenderer.invoke('whisper-transcribe', { audioBuffer, apiKey, provider }),
+  // Speech-to-text. The main process picks the stored key for the provider.
+  // The recording is sent in the recorder's own format (no conversion).
+  transcribeAudio: (audioBuffer: ArrayBuffer, provider: Provider, mimeType: string): Promise<string> =>
+    ipcRenderer.invoke('transcribe-audio', { audioBuffer, provider, mimeType }),
 
   // Settings
-  getSettings: (): Promise<{
-    apiKey: string;
-    apiKeys?: Record<string, string>;
-    provider: 'openai' | 'groq' | 'gemini';
-    model: string;
-    opacity: number;
-    fontSize: number;
-    sttProvider: 'whisper';
-    reasoningEffort: 'off' | 'minimal' | 'low' | 'medium' | 'high';
-    activeSystemPromptId: string | null;
-  }> => ipcRenderer.invoke('get-settings'),
-
-  saveSettings: (settings: Record<string, unknown>) =>
-    ipcRenderer.send('save-settings', settings),
+  getSettings: (): Promise<Settings> => ipcRenderer.invoke('get-settings'),
+  saveSettings: (settings: SettingsUpdate) => ipcRenderer.send('save-settings', settings),
+  setApiKey: (provider: Provider, key: string): Promise<Record<Provider, boolean>> =>
+    ipcRenderer.invoke('set-api-key', provider, key),
 
   // System prompts
-  getSystemPrompts: (): Promise<Array<{
-    id: string;
-    name: string;
-    content: string;
-    isDefault: boolean;
-  }>> => ipcRenderer.invoke('get-system-prompts'),
-
-  saveSystemPrompt: (prompt: { id?: string; name: string; content: string }) =>
+  getSystemPrompts: (): Promise<SystemPrompt[]> => ipcRenderer.invoke('get-system-prompts'),
+  saveSystemPrompt: (prompt: { id?: string; name: string; content: string }): Promise<SystemPrompt> =>
     ipcRenderer.invoke('save-system-prompt', prompt),
-
-  deleteSystemPrompt: (id: string): Promise<boolean> =>
-    ipcRenderer.invoke('delete-system-prompt', id),
+  deleteSystemPrompt: (id: string): Promise<boolean> => ipcRenderer.invoke('delete-system-prompt', id),
 
   // Shortcuts from main process
-  onToggleMic: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('shortcut-toggle-mic', handler)
-    return () => ipcRenderer.removeListener('shortcut-toggle-mic', handler)
-  },
-
-  onScreenshotShortcut: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('shortcut-screenshot', handler)
-    return () => ipcRenderer.removeListener('shortcut-screenshot', handler)
-  },
-
-  onClearChat: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('shortcut-clear-chat', handler)
-    return () => ipcRenderer.removeListener('shortcut-clear-chat', handler)
-  },
-
-  onClearInput: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('shortcut-clear-input', handler)
-    return () => ipcRenderer.removeListener('shortcut-clear-input', handler)
-  },
-
-  onFocusInput: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('shortcut-focus-input', handler)
-    return () => ipcRenderer.removeListener('shortcut-focus-input', handler)
-  },
-
-  onFindInChat: (callback: () => void) => {
-    const handler = () => callback()
-    ipcRenderer.on('shortcut-find-in-chat', handler)
-    return () => ipcRenderer.removeListener('shortcut-find-in-chat', handler)
-  },
-
-  onScroll: (callback: (direction: 'up' | 'down') => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, direction: 'up' | 'down') => callback(direction)
-    ipcRenderer.on('shortcut-scroll', handler)
-    return () => ipcRenderer.removeListener('shortcut-scroll', handler)
-  }
+  onToggleMic: (callback: () => void) => subscribe('shortcut-toggle-mic', callback),
+  onScreenshotShortcut: (callback: () => void) => subscribe('shortcut-screenshot', callback),
+  onClearChat: (callback: () => void) => subscribe('shortcut-clear-chat', callback),
+  onClearInput: (callback: () => void) => subscribe('shortcut-clear-input', callback),
+  onFocusInput: (callback: () => void) => subscribe('shortcut-focus-input', callback),
+  onFindInChat: (callback: () => void) => subscribe('shortcut-find-in-chat', callback),
+  onScroll: (callback: (direction: 'up' | 'down') => void) => subscribe('shortcut-scroll', callback)
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

@@ -1,8 +1,8 @@
-import { Tray, Menu, BrowserWindow, nativeImage, app } from 'electron'
+import { Tray, Menu, BrowserWindow, nativeImage, app, type NativeImage } from 'electron'
 
 let tray: Tray | null = null
 
-function createTrayIcon(): nativeImage {
+function createTrayIcon(): NativeImage {
   // Create a 32x32 icon with a simple "iV" design using raw RGBA buffer
   const size = 32
   const buffer = Buffer.alloc(size * size * 4)

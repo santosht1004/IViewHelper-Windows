@@ -2,7 +2,7 @@ import { BrowserWindow, screen, app } from 'electron'
 import { join } from 'path'
 
 export function createStealthWindow(): BrowserWindow {
-  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+  const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize
 
   const win = new BrowserWindow({
     width: 420,
@@ -25,7 +25,7 @@ export function createStealthWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   })
 

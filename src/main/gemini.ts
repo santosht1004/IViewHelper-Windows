@@ -1,5 +1,8 @@
-import { BrowserWindow } from 'electron'
-import { filterHallucinations } from './openai'
+import type { AudioMimeType, ChatMessagePayload, ChatRequest } from '../shared/ipc'
+import { isAbortError, type StreamSink } from './stream'
+import { filterHallucinations } from './transcript-filter'
+
+const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 interface GeminiPart {
   text?: string
@@ -25,73 +28,84 @@ function validateGeminiKey(apiKey: string): string {
   return trimmed
 }
 
-export async function streamGeminiChat(
-  mainWindow: BrowserWindow,
-  payload: {
-    messages: Array<{ role: string; content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
-    model: string;
-    systemPrompt: string;
-    apiKey: string;
-    provider: string;
-    reasoningEffort: 'off' | 'minimal' | 'low' | 'medium' | 'high';
+export function toGeminiContents(messages: ChatMessagePayload[]): GeminiContent[] {
+  const contents: GeminiContent[] = []
+
+  for (const msg of messages) {
+    const role: 'user' | 'model' = msg.role === 'assistant' ? 'model' : 'user'
+    const parts: GeminiPart[] = []
+
+    if (typeof msg.content === 'string') {
+      if (msg.content) parts.push({ text: msg.content })
+    } else {
+      for (const item of msg.content) {
+        if (item.type === 'text' && item.text) {
+          parts.push({ text: item.text })
+        } else if (item.type === 'image_url' && item.image_url.url) {
+          const match = item.image_url.url.match(/^data:([^;]+);base64,(.+)$/)
+          parts.push({
+            inline_data: match
+              ? { mime_type: match[1], data: match[2] }
+              : { mime_type: 'image/png', data: item.image_url.url }
+          })
+        }
+      }
+    }
+
+    // Gemini rejects empty parts, so drop messages with nothing to send (e.g. an empty reply).
+    if (parts.length > 0) contents.push({ role, parts })
   }
+
+  return contents
+}
+
+// Extracts the text from one SSE line of a streamGenerateContent response.
+export function parseSseLine(line: string): string {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('data:')) return ''
+  const dataStr = trimmed.slice(5).trim()
+  if (!dataStr || dataStr === '[DONE]') return ''
+
+  try {
+    const data = JSON.parse(dataStr)
+    const parts: GeminiPart[] = data.candidates?.[0]?.content?.parts ?? []
+    return parts.map(p => p.text ?? '').join('')
+  } catch {
+    return ''
+  }
+}
+
+async function readError(response: Response, fallback: string): Promise<Error> {
+  const errorText = await response.text()
+  try {
+    const errorJson = JSON.parse(errorText)
+    if (errorJson.error?.message) return new Error(errorJson.error.message)
+  } catch {
+    if (errorText) return new Error(errorText)
+  }
+  return new Error(fallback)
+}
+
+export async function streamGeminiChat(
+  request: ChatRequest,
+  apiKey: string,
+  sink: StreamSink,
+  signal: AbortSignal
 ): Promise<void> {
   try {
-    const key = validateGeminiKey(payload.apiKey)
-    const contents: GeminiContent[] = []
-
-    for (const msg of payload.messages) {
-      const role: 'user' | 'model' = msg.role === 'assistant' ? 'model' : 'user'
-      const parts: GeminiPart[] = []
-
-      if (typeof msg.content === 'string') {
-        if (msg.content) {
-          parts.push({ text: msg.content })
-        }
-      } else if (Array.isArray(msg.content)) {
-        for (const item of msg.content) {
-          if (item.type === 'text' && item.text) {
-            parts.push({ text: item.text })
-          } else if (item.type === 'image_url' && item.image_url?.url) {
-            const match = item.image_url.url.match(/^data:([^;]+);base64,(.+)$/)
-            if (match) {
-              parts.push({
-                inline_data: {
-                  mime_type: match[1],
-                  data: match[2]
-                }
-              })
-            } else {
-              parts.push({
-                inline_data: {
-                  mime_type: 'image/png',
-                  data: item.image_url.url
-                }
-              })
-            }
-          }
-        }
-      }
-
-      if (parts.length === 0) {
-        parts.push({ text: '' })
-      }
-
-      contents.push({ role, parts })
-    }
-
+    const key = validateGeminiKey(apiKey)
     const body: Record<string, unknown> = {
-      contents
+      contents: toGeminiContents(request.messages)
     }
 
-    if (payload.systemPrompt && payload.systemPrompt.trim()) {
+    if (request.systemPrompt && request.systemPrompt.trim()) {
       body.system_instruction = {
-        parts: [{ text: payload.systemPrompt }]
+        parts: [{ text: request.systemPrompt }]
       }
     }
 
-    const isReasoningModel = /^(gemini-3|gemini-2\.5|gemini-2\.0-flash-thinking)/.test(payload.model)
-    if (isReasoningModel && payload.reasoningEffort !== 'off') {
+    const isReasoningModel = /^(gemini-3|gemini-2\.5|gemini-2\.0-flash-thinking)/.test(request.model)
+    if (isReasoningModel && request.reasoningEffort !== 'off') {
       const budgetMap: Record<string, number> = {
         minimal: 1024,
         low: 2048,
@@ -100,13 +114,14 @@ export async function streamGeminiChat(
       }
       body.generationConfig = {
         thinkingConfig: {
-          thinkingBudget: budgetMap[payload.reasoningEffort] || 2048
+          thinkingBudget: budgetMap[request.reasoningEffort] || 2048
         }
       }
     }
 
-    const modelName = payload.model || 'gemini-flash-latest'
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`
+    const modelName = request.model || 'gemini-flash-latest'
+    // The key goes in the header only, never the URL, so it can't leak into request logs.
+    const url = `${API_BASE}/${encodeURIComponent(modelName)}:streamGenerateContent?alt=sse`
 
     const response = await fetch(url, {
       method: 'POST',
@@ -114,21 +129,12 @@ export async function streamGeminiChat(
         'Content-Type': 'application/json',
         'X-goog-api-key': key
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     })
 
     if (!response.ok) {
-      const errorText = await response.text()
-      let errorMsg = `Gemini API error (${response.status})`
-      try {
-        const errorJson = JSON.parse(errorText)
-        if (errorJson.error?.message) {
-          errorMsg = errorJson.error.message
-        }
-      } catch {
-        if (errorText) errorMsg = errorText
-      }
-      throw new Error(errorMsg)
+      throw await readError(response, `Gemini API error (${response.status})`)
     }
 
     if (!response.body) {
@@ -148,54 +154,30 @@ export async function streamGeminiChat(
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || !trimmed.startsWith('data:')) continue
-        const dataStr = trimmed.slice(5).trim()
-        if (!dataStr || dataStr === '[DONE]') continue
-
-        try {
-          const data = JSON.parse(dataStr)
-          if (data.candidates && data.candidates[0]?.content?.parts) {
-            for (const part of data.candidates[0].content.parts) {
-              if (part.text) {
-                mainWindow.webContents.send('openai-stream-chunk', part.text)
-              }
-            }
-          }
-        } catch {
-          // Incomplete chunk parse error, ignore
-        }
+        const text = parseSseLine(line)
+        if (text) sink.chunk(text)
       }
     }
 
-    if (buffer.trim().startsWith('data:')) {
-      try {
-        const data = JSON.parse(buffer.trim().slice(5).trim())
-        if (data.candidates && data.candidates[0]?.content?.parts) {
-          for (const part of data.candidates[0].content.parts) {
-            if (part.text) {
-              mainWindow.webContents.send('openai-stream-chunk', part.text)
-            }
-          }
-        }
-      } catch {}
-    }
+    const tail = parseSseLine(buffer)
+    if (tail) sink.chunk(tail)
 
-    mainWindow.webContents.send('openai-stream-done')
+    sink.done()
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    mainWindow.webContents.send('openai-stream-error', message)
+    if (signal.aborted || isAbortError(error)) return
+    sink.error(error instanceof Error ? error.message : 'Unknown error')
   }
 }
 
 export async function transcribeGeminiAudio(
   audioBuffer: ArrayBuffer,
+  mimeType: AudioMimeType,
   apiKey: string,
   model: string = 'gemini-flash-latest'
 ): Promise<string> {
   const key = validateGeminiKey(apiKey)
   const base64Audio = Buffer.from(audioBuffer).toString('base64')
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`
+  const url = `${API_BASE}/${encodeURIComponent(model)}:generateContent`
 
   const body = {
     contents: [
@@ -203,7 +185,7 @@ export async function transcribeGeminiAudio(
         parts: [
           {
             inline_data: {
-              mime_type: 'audio/webm',
+              mime_type: mimeType,
               data: base64Audio
             }
           },
@@ -228,17 +210,7 @@ export async function transcribeGeminiAudio(
   })
 
   if (!response.ok) {
-    const errorText = await response.text()
-    let errorMsg = `Gemini audio transcription error (${response.status})`
-    try {
-      const errorJson = JSON.parse(errorText)
-      if (errorJson.error?.message) {
-        errorMsg = errorJson.error.message
-      }
-    } catch {
-      if (errorText) errorMsg = errorText
-    }
-    throw new Error(errorMsg)
+    throw await readError(response, `Gemini audio transcription error (${response.status})`)
   }
 
   const data = await response.json()

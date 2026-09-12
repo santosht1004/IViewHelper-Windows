@@ -1,99 +1,122 @@
-import { BrowserWindow } from 'electron'
 import OpenAI, { toFile } from 'openai'
+import type { AlibabaRegion, AudioMimeType, ChatRequest, Provider } from '../shared/ipc'
+import { audioFileExtension } from './audio'
+import { isAbortError, type StreamSink } from './stream'
+import { filterHallucinations } from './transcript-filter'
 
-const PROVIDER_BASE_URLS: Record<string, string> = {
+// Providers served through the OpenAI-compatible Chat Completions API.
+export type OpenAICompatibleProvider = Exclude<Provider, 'gemini'>
+
+const PROVIDER_BASE_URLS: Record<Exclude<OpenAICompatibleProvider, 'alibaba'>, string> = {
   openai: 'https://api.openai.com/v1',
   groq: 'https://api.groq.com/openai/v1'
 }
 
-let client: OpenAI | null = null
-let currentProvider: string | null = null
+// Alibaba Cloud Model Studio (DashScope) compatible-mode endpoints. Keys only work in their own region.
+const ALIBABA_BASE_URLS: Record<AlibabaRegion, string> = {
+  singapore: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  us: 'https://dashscope-us.aliyuncs.com/compatible-mode/v1',
+  beijing: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+}
 
-function getClient(apiKey: string, provider: string = 'openai'): OpenAI {
-  if (!client || client.apiKey !== apiKey || currentProvider !== provider) {
-    client = new OpenAI({
-      apiKey,
-      baseURL: PROVIDER_BASE_URLS[provider] || PROVIDER_BASE_URLS.openai
-    })
-    currentProvider = provider
+const PROVIDER_LABELS: Record<OpenAICompatibleProvider, string> = {
+  openai: 'OpenAI',
+  groq: 'Groq',
+  alibaba: 'Alibaba Cloud Model Studio'
+}
+
+// One Qwen-Omni model handles chat, screenshots, and mic transcription.
+export const ALIBABA_OMNI_MODEL = 'qwen3.5-omni-flash'
+
+// Groq vision is only supported on specific models
+const GROQ_VISION_MODELS = [
+  'llama-3.2-11b-vision-preview',
+  'llama-3.2-90b-vision-preview'
+]
+
+let client: OpenAI | null = null
+
+function getClient(apiKey: string, provider: OpenAICompatibleProvider, alibabaRegion: AlibabaRegion): OpenAI {
+  if (!apiKey) {
+    throw new Error(`${PROVIDER_LABELS[provider]} API key is required. Please set it in Settings.`)
+  }
+  const baseURL = provider === 'alibaba' ? ALIBABA_BASE_URLS[alibabaRegion] : PROVIDER_BASE_URLS[provider]
+  if (!client || client.apiKey !== apiKey || client.baseURL !== baseURL) {
+    client = new OpenAI({ apiKey, baseURL })
   }
   return client
 }
 
 export async function streamChat(
-  mainWindow: BrowserWindow,
-  payload: {
-    messages: Array<{ role: string; content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
-    model: string;
-    systemPrompt: string;
-    apiKey: string;
-    provider: string;
-    reasoningEffort: 'off' | 'minimal' | 'low' | 'medium' | 'high';
-  }
+  request: ChatRequest & { provider: OpenAICompatibleProvider },
+  apiKey: string,
+  alibabaRegion: AlibabaRegion,
+  sink: StreamSink,
+  signal: AbortSignal
 ): Promise<void> {
-  const openai = getClient(payload.apiKey, payload.provider)
-
-  // Groq vision is only supported on specific models
-  const GROQ_VISION_MODELS = [
-    'llama-3.2-11b-vision-preview',
-    'llama-3.2-90b-vision-preview'
-  ]
-  const supportsVision = payload.provider !== 'groq' || GROQ_VISION_MODELS.includes(payload.model) || /vision/i.test(payload.model)
+  const supportsVision =
+    request.provider !== 'groq' || GROQ_VISION_MODELS.includes(request.model) || /vision/i.test(request.model)
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = []
 
   // Add system prompt
-  if (payload.systemPrompt) {
-    messages.push({ role: 'system', content: payload.systemPrompt })
+  if (request.systemPrompt) {
+    messages.push({ role: 'system', content: request.systemPrompt })
   }
 
   // Add conversation messages, stripping images for non-vision models
-  for (const msg of payload.messages) {
+  for (const msg of request.messages) {
     if (!supportsVision && Array.isArray(msg.content)) {
       const textParts = msg.content
-        .filter((p: { type: string }) => p.type === 'text')
-        .map((p: { text?: string }) => p.text || '')
+        .map(p => (p.type === 'text' ? p.text : ''))
+        .filter(Boolean)
         .join('\n')
-      messages.push({ role: msg.role, content: textParts || '[screenshot attached — this model does not support images]' } as OpenAI.Chat.Completions.ChatCompletionMessageParam)
+      messages.push({ role: msg.role, content: textParts || '[screenshot attached — this model does not support images]' })
     } else {
       messages.push(msg as OpenAI.Chat.Completions.ChatCompletionMessageParam)
     }
   }
 
   try {
-    const isReasoningModel = payload.provider === 'openai' && /^(o\d|gpt-5)/.test(payload.model)
-    const sendReasoning = isReasoningModel && payload.reasoningEffort !== 'off'
+    const openai = getClient(apiKey, request.provider, alibabaRegion)
+    const isReasoningModel = request.provider === 'openai' && /^(o\d|gpt-5)/.test(request.model)
+    const sendReasoning = isReasoningModel && request.reasoningEffort !== 'off'
 
-    const stream = await openai.chat.completions.create({
-      model: payload.model,
-      messages,
-      stream: true,
-      ...(sendReasoning && { reasoning_effort: payload.reasoningEffort })
-    })
+    const stream = await openai.chat.completions.create(
+      {
+        model: request.model,
+        messages,
+        stream: true,
+        // The API accepts 'minimal' for gpt-5 models even though this SDK version's type omits it.
+        ...(sendReasoning && { reasoning_effort: request.reasoningEffort as OpenAI.ReasoningEffort }),
+        // Qwen-Omni can also speak; ask for text only.
+        ...(request.provider === 'alibaba' && { modalities: ['text'] as OpenAI.Chat.ChatCompletionModality[] })
+      },
+      { signal }
+    )
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content
-      if (delta) {
-        mainWindow.webContents.send('openai-stream-chunk', delta)
-      }
+      if (delta) sink.chunk(delta)
     }
 
-    mainWindow.webContents.send('openai-stream-done')
+    sink.done()
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    mainWindow.webContents.send('openai-stream-error', message)
+    if (signal.aborted || isAbortError(error)) return
+    sink.error(error instanceof Error ? error.message : 'Unknown error')
   }
 }
 
 export async function transcribeAudio(
   audioBuffer: ArrayBuffer,
+  mimeType: AudioMimeType,
   apiKey: string,
-  provider: string = 'openai'
+  provider: Exclude<OpenAICompatibleProvider, 'alibaba'>
 ): Promise<string> {
-  const openai = getClient(apiKey, provider)
+  const openai = getClient(apiKey, provider, 'singapore')
 
   const buffer = Buffer.from(audioBuffer)
-  const file = await toFile(buffer, 'audio.webm', { type: 'audio/webm' })
+  const file = await toFile(buffer, `audio.${audioFileExtension(mimeType)}`, { type: mimeType })
 
   const response = await openai.audio.transcriptions.create({
     model: provider === 'groq' ? 'whisper-large-v3-turbo' : 'whisper-1',
@@ -106,44 +129,47 @@ export async function transcribeAudio(
   return filterHallucinations(response as unknown as string)
 }
 
-// Whisper hallucinates common YouTube/video outro phrases on silence or noise.
-// Drop them post-transcription as a safety net behind the client-side VAD.
-const HALLUCINATIONS = new Set([
-  'thank you',
-  'thank you bye bye',
-  'thank you bye',
-  'bye bye',
-  'thanks for watching',
-  'thank you for watching',
-  'thank you so much for watching',
-  'thank you so much for watching and ill see you in the next video',
-  'thanks for watching see you in the next video',
-  'ill see you in the next video',
-  'see you in the next video',
-  'dont forget to subscribe',
-  'like and subscribe',
-  'please subscribe',
-  'subtitles by the amaraorg community',
-  'subtitles by',
-  'subtitles',
-  'music',
-  'applause',
-  'silence',
-  'mm',
-  'mmm',
-  'hmm',
-  'uh',
-  'um'
-])
+// Qwen-Omni has no transcription endpoint, so the recording (sent as-is, not converted) goes
+// to the same omni model through Chat Completions. Omni models only support streaming output.
+export async function transcribeAlibabaAudio(
+  audioBuffer: ArrayBuffer,
+  mimeType: AudioMimeType,
+  apiKey: string,
+  alibabaRegion: AlibabaRegion
+): Promise<string> {
+  const openai = getClient(apiKey, 'alibaba', alibabaRegion)
+  const base64Audio = Buffer.from(audioBuffer).toString('base64')
 
-export function filterHallucinations(text: string): string {
-  if (!text) return ''
-  const normalized = text
-    .toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!normalized) return ''
-  if (HALLUCINATIONS.has(normalized)) return ''
-  return text
+  const audioPart = {
+    type: 'input_audio',
+    input_audio: {
+      data: `data:${mimeType};base64,${base64Audio}`,
+      format: audioFileExtension(mimeType)
+    }
+  } as unknown as OpenAI.Chat.Completions.ChatCompletionContentPartInputAudio
+
+  const stream = await openai.chat.completions.create({
+    model: ALIBABA_OMNI_MODEL,
+    stream: true,
+    modalities: ['text'],
+    messages: [
+      {
+        role: 'user',
+        content: [
+          audioPart,
+          {
+            type: 'text',
+            text: 'Transcribe the spoken words in this audio verbatim. Output ONLY the raw transcription text, nothing else. Do not add explanations, formatting, or labels. If there is no speech, output nothing.'
+          }
+        ]
+      }
+    ]
+  })
+
+  let text = ''
+  for await (const chunk of stream) {
+    text += chunk.choices[0]?.delta?.content ?? ''
+  }
+
+  return filterHallucinations(text.trim())
 }
