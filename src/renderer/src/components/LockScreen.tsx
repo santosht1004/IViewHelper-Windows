@@ -5,19 +5,42 @@ interface Props {
   onUnlocked: () => void
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.ceil(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds.toString().padStart(2, '0')}s` : `${seconds}s`
+}
+
 export function LockScreen({ onUnlocked }: Props) {
   const [password, setPassword] = useState('')
   const [visible, setVisible] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [lockedUntil, setLockedUntil] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
   const inputRef = useRef<HTMLInputElement>(null)
+  const lockedForMs = Math.max(0, lockedUntil - now)
+  const isLockedOut = lockedForMs > 0
 
+  // Lockouts persist across restarts, so check for one before accepting input.
   useEffect(() => {
-    inputRef.current?.focus()
+    window.electronAPI.getAuthStatus()
+      .then(status => {
+        if (status.lockedForMs > 0) setLockedUntil(Date.now() + status.lockedForMs)
+      })
+      .catch(() => {})
+      .finally(() => inputRef.current?.focus())
   }, [])
 
+  useEffect(() => {
+    if (!isLockedOut) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [isLockedOut])
+
   const submit = async () => {
-    if (busy || !password) return
+    if (busy || !password || isLockedOut) return
     setBusy(true)
     setError(null)
     try {
@@ -27,11 +50,13 @@ export function LockScreen({ onUnlocked }: Props) {
         return
       }
       setPassword('')
-      setError(
-        result.remaining > 0
-          ? `Incorrect password. ${result.remaining} attempt${result.remaining === 1 ? '' : 's'} left.`
-          : 'Too many failed attempts. Closing.'
-      )
+      if (result.lockedForMs > 0) {
+        setLockedUntil(Date.now() + result.lockedForMs)
+        setNow(Date.now())
+        setError(null)
+      } else {
+        setError(`Incorrect password. ${result.remaining} attempt${result.remaining === 1 ? '' : 's'} left.`)
+      }
       inputRef.current?.focus()
     } catch {
       setError('Could not verify password.')
@@ -50,7 +75,7 @@ export function LockScreen({ onUnlocked }: Props) {
         <div
           className="flex items-center justify-between px-4 py-3 select-none"
           style={{
-            WebkitAppRegion: 'drag' as unknown as string,
+            WebkitAppRegion: 'drag',
             background: 'linear-gradient(180deg, rgba(99,102,241,0.08) 0%, transparent 100%)',
             borderBottom: '1px solid var(--border)'
           }}
@@ -69,7 +94,7 @@ export function LockScreen({ onUnlocked }: Props) {
           <button
             onClick={() => window.electronAPI.close()}
             className="p-1.5 rounded-md transition-colors hover:bg-red-500/15"
-            style={{ WebkitAppRegion: 'no-drag' as unknown as string }}
+            style={{ WebkitAppRegion: 'no-drag' }}
             title="Quit"
           >
             <X size={13} style={{ color: 'var(--danger)' }} />
@@ -93,7 +118,7 @@ export function LockScreen({ onUnlocked }: Props) {
               ref={inputRef}
               type={visible ? 'text' : 'password'}
               value={password}
-              disabled={busy}
+              disabled={busy || isLockedOut}
               onChange={e => setPassword(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') submit() }}
               placeholder="Password"
@@ -113,12 +138,18 @@ export function LockScreen({ onUnlocked }: Props) {
 
           <button
             onClick={submit}
-            disabled={busy || !password}
+            disabled={busy || !password || isLockedOut}
             className="w-full text-sm py-2 rounded-lg transition-all disabled:opacity-30"
             style={{ background: 'var(--accent)', color: '#fff' }}
           >
             {busy ? 'Checking...' : 'Unlock'}
           </button>
+
+          {isLockedOut && (
+            <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>
+              Too many failed attempts. Try again in {formatDuration(lockedForMs)}.
+            </p>
+          )}
 
           {error && (
             <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>{error}</p>

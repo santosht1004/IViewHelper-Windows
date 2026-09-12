@@ -1,9 +1,16 @@
 import { useRef } from 'react'
-import { X, AlertTriangle, Type, Server } from 'lucide-react'
+import { X, AlertTriangle, Type, Server, Globe } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { ApiKeyInput } from './ApiKeyInput'
 import { SystemPromptEditor, type SystemPromptEditorHandle } from './SystemPromptEditor'
 import { SystemPromptList } from './SystemPromptList'
+import type { AlibabaRegion } from '../../lib/types'
+
+const ALIBABA_REGION_OPTIONS: Array<{ value: AlibabaRegion; label: string }> = [
+  { value: 'singapore', label: 'Singapore (International)' },
+  { value: 'us', label: 'US (Virginia)' },
+  { value: 'beijing', label: 'China (Beijing)' }
+]
 
 const FONT_SIZES = [
   { value: 12, label: 'Small' },
@@ -19,12 +26,15 @@ export function SettingsPanel() {
   const setFontSize = useSettingsStore(s => s.setFontSize)
   const provider = useSettingsStore(s => s.provider)
   const setProvider = useSettingsStore(s => s.setProvider)
+  const alibabaRegion = useSettingsStore(s => s.alibabaRegion)
+  const setAlibabaRegion = useSettingsStore(s => s.setAlibabaRegion)
   const editorRef = useRef<SystemPromptEditorHandle>(null)
 
   const PROVIDERS = [
     { value: 'openai' as const, label: 'OpenAI' },
     { value: 'groq' as const, label: 'Groq' },
-    { value: 'gemini' as const, label: 'Gemini' }
+    { value: 'gemini' as const, label: 'Gemini' },
+    { value: 'alibaba' as const, label: 'Alibaba' }
   ]
 
   if (!showSettings) return null
@@ -79,6 +89,25 @@ export function SettingsPanel() {
         </div>
 
         <ApiKeyInput />
+
+        {provider === 'alibaba' && (
+          <div>
+            <label className="flex items-center gap-1.5 text-xs mb-2 font-medium" style={{ color: 'var(--text-secondary)' }}>
+              <Globe size={12} />
+              Region
+            </label>
+            <select
+              value={alibabaRegion}
+              onChange={e => setAlibabaRegion(e.target.value as typeof alibabaRegion)}
+              className="w-full text-xs px-2 py-2 rounded-lg cursor-pointer outline-none"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              {ALIBABA_REGION_OPTIONS.map(r => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Font Size */}
         <div>

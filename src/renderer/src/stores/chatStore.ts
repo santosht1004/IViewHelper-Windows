@@ -5,14 +5,15 @@ interface ChatState {
   messages: Message[]
   pendingScreenshots: string[]
   isStreaming: boolean
+  activeRequestId: string | null
   streamingContent: string
   error: string | null
 
   addUserMessage: (content: string, screenshots: string[]) => void
-  startStream: () => void
-  appendStreamChunk: (chunk: string) => void
-  finalizeStream: () => void
-  setStreamError: (error: string) => void
+  startStream: () => string
+  appendStreamChunk: (requestId: string, chunk: string) => void
+  finalizeStream: (requestId: string) => void
+  setStreamError: (requestId: string, error: string) => void
   addScreenshot: (base64: string) => void
   removeScreenshot: (index: number) => void
   clearScreenshots: () => void
@@ -23,6 +24,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   pendingScreenshots: [],
   isStreaming: false,
+  activeRequestId: null,
   streamingContent: '',
   error: null,
 
@@ -38,15 +40,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   startStream: () => {
-    set({ isStreaming: true, streamingContent: '', error: null })
+    const { activeRequestId } = get()
+    if (activeRequestId) window.electronAPI.cancelChat(activeRequestId)
+    const requestId = crypto.randomUUID()
+    set({ isStreaming: true, activeRequestId: requestId, streamingContent: '', error: null })
+    return requestId
   },
 
-  appendStreamChunk: (chunk) => {
+  // Stream events for any request other than the active one (cancelled, or from before a clear) are ignored.
+  appendStreamChunk: (requestId, chunk) => {
+    if (requestId !== get().activeRequestId) return
     set(state => ({ streamingContent: state.streamingContent + chunk }))
   },
 
-  finalizeStream: () => {
-    const { streamingContent } = get()
+  finalizeStream: (requestId) => {
+    const { streamingContent, activeRequestId } = get()
+    if (requestId !== activeRequestId) return
     const msg: Message = {
       id: crypto.randomUUID(),
       role: 'assistant',
@@ -57,12 +66,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(state => ({
       messages: [...state.messages, msg],
       isStreaming: false,
+      activeRequestId: null,
       streamingContent: ''
     }))
   },
 
-  setStreamError: (error) => {
-    set({ isStreaming: false, streamingContent: '', error })
+  setStreamError: (requestId, error) => {
+    if (requestId !== get().activeRequestId) return
+    set({ isStreaming: false, activeRequestId: null, streamingContent: '', error })
   },
 
   addScreenshot: (base64) => {
@@ -77,5 +88,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   clearScreenshots: () => set({ pendingScreenshots: [] }),
 
-  clearChat: () => set({ messages: [], streamingContent: '', isStreaming: false, error: null })
+  clearChat: () => {
+    const { activeRequestId } = get()
+    if (activeRequestId) window.electronAPI.cancelChat(activeRequestId)
+    set({ messages: [], streamingContent: '', isStreaming: false, activeRequestId: null, error: null })
+  }
 }))

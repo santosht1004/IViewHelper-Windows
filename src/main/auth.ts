@@ -1,5 +1,17 @@
 import { app } from 'electron'
-import { scryptSync, timingSafeEqual } from 'crypto'
+import { scrypt, timingSafeEqual } from 'crypto'
+import { promisify } from 'util'
+import type { AuthStatus, UnlockResult } from '../shared/ipc'
+import { store } from './store'
+import {
+  failureDelayMs,
+  INITIAL_LOCKOUT_STATE,
+  lockedForMs,
+  recordFailure,
+  remainingAttempts
+} from './lockout'
+
+const scryptAsync = promisify(scrypt) as (password: string, salt: string, keylen: number) => Promise<Buffer>
 
 // Launch password. Only a salted scrypt hash is embedded; the plaintext is never stored.
 // To change the password, regenerate SALT + HASH with:
@@ -10,10 +22,8 @@ const HASH = Buffer.from(
   'hex'
 )
 
-const MAX_ATTEMPTS = 5
-
 let unlocked = false
-let failures = 0
+let verifying = false
 let unlockListeners: Array<() => void> = []
 
 export function isUnlocked(): boolean {
@@ -24,31 +34,51 @@ export function onUnlock(listener: () => void): void {
   unlockListeners.push(listener)
 }
 
-export async function verifyPassword(password: unknown): Promise<{ ok: boolean; remaining: number }> {
-  if (unlocked) return { ok: true, remaining: MAX_ATTEMPTS }
+export function getAuthStatus(): AuthStatus {
+  // Failure count and lockout are persisted so restarting the app does not reset them.
+  const state = store.get('authState')
+  return {
+    unlocked,
+    remaining: remainingAttempts(state),
+    lockedForMs: lockedForMs(state, Date.now())
+  }
+}
 
-  const candidate = typeof password === 'string' ? password : ''
-  const derived = scryptSync(candidate, SALT, HASH.length)
-  const ok = derived.length === HASH.length && timingSafeEqual(derived, HASH)
-
-  if (ok) {
-    unlocked = true
-    failures = 0
-    const listeners = unlockListeners
-    unlockListeners = []
-    for (const l of listeners) l()
-    return { ok: true, remaining: MAX_ATTEMPTS }
+export async function verifyPassword(password: unknown): Promise<UnlockResult> {
+  const status = getAuthStatus()
+  if (status.lockedForMs > 0 || verifying) {
+    return { ok: false, remaining: status.remaining, lockedForMs: status.lockedForMs }
   }
 
-  failures++
-  const remaining = Math.max(0, MAX_ATTEMPTS - failures)
+  verifying = true
+  try {
+    const candidate = typeof password === 'string' ? password : ''
+    const derived = await scryptAsync(candidate, SALT, HASH.length)
+    const ok = derived.length === HASH.length && timingSafeEqual(derived, HASH)
 
-  // Slow down brute force: linear back-off per failure.
-  await new Promise(resolve => setTimeout(resolve, 1000 * failures))
+    if (ok) {
+      store.set('authState', INITIAL_LOCKOUT_STATE)
+      if (!unlocked) {
+        unlocked = true
+        const listeners = unlockListeners
+        unlockListeners = []
+        for (const l of listeners) l()
+      }
+      return { ok: true, remaining: remainingAttempts(INITIAL_LOCKOUT_STATE), lockedForMs: 0 }
+    }
 
-  if (failures >= MAX_ATTEMPTS) {
-    setTimeout(() => app.quit(), 300)
+    const next = recordFailure(store.get('authState'), Date.now())
+    store.set('authState', next)
+
+    await new Promise(resolve => setTimeout(resolve, failureDelayMs(next)))
+
+    const lockedFor = lockedForMs(next, Date.now())
+    if (lockedFor > 0) {
+      setTimeout(() => app.quit(), 1500)
+    }
+
+    return { ok: false, remaining: lockedFor > 0 ? 0 : remainingAttempts(next), lockedForMs: lockedFor }
+  } finally {
+    verifying = false
   }
-
-  return { ok: false, remaining }
 }

@@ -19,10 +19,9 @@ export function useSpeechRecognition(onTranscript: (text: string) => void) {
   const isTranscribingRef = useRef(false)
 
   const processAudioChunk = useCallback(async (blob: Blob) => {
-    const apiKey = useSettingsStore.getState().apiKey
-    const provider = useSettingsStore.getState().provider
+    const { provider, hasApiKey } = useSettingsStore.getState()
 
-    if (!apiKey) {
+    if (!hasApiKey[provider]) {
       useSpeechStore.getState().setError(`API key required for ${provider.toUpperCase()}`)
       useSpeechStore.getState().setInterimTranscript('')
       return
@@ -32,7 +31,7 @@ export function useSpeechRecognition(onTranscript: (text: string) => void) {
       isTranscribingRef.current = true
       useSpeechStore.getState().setInterimTranscript('⚡ Transcribing...')
       const buffer = await blob.arrayBuffer()
-      const transcript = await window.electronAPI.whisperTranscribe(buffer, apiKey, provider)
+      const transcript = await window.electronAPI.transcribeAudio(buffer, provider, blob.type || mimeTypeRef.current)
 
       if (transcript && transcript.trim()) {
         useSpeechStore.getState().setError(null)
@@ -206,7 +205,9 @@ export function useSpeechRecognition(onTranscript: (text: string) => void) {
         if (mediaRecorderRef.current.state === 'recording') {
           mediaRecorderRef.current.stop()
         }
-      } catch {}
+      } catch {
+        // Recorder may already be inactive; nothing to clean up.
+      }
       mediaRecorderRef.current = null
     }
 

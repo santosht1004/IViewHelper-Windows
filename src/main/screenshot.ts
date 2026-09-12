@@ -26,6 +26,10 @@ export async function captureScreen(mainWindow: BrowserWindow): Promise<string> 
   }
 }
 
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
 async function captureMacOS(): Promise<string> {
   // Try multiple approaches in order of reliability
   const errors: string[] = []
@@ -33,22 +37,22 @@ async function captureMacOS(): Promise<string> {
   // Attempt 1: screencapture with main display flag
   try {
     return await screencaptureCmd(['-x', '-t', 'png', '-D', '1'])
-  } catch (e: any) {
-    errors.push(`screencapture -D1: ${e.message}`)
+  } catch (e) {
+    errors.push(`screencapture -D1: ${errorMessage(e)}`)
   }
 
   // Attempt 2: screencapture basic (no -C, no -D)
   try {
     return await screencaptureCmd(['-x', '-t', 'png'])
-  } catch (e: any) {
-    errors.push(`screencapture basic: ${e.message}`)
+  } catch (e) {
+    errors.push(`screencapture basic: ${errorMessage(e)}`)
   }
 
   // Attempt 3: desktopCapturer as fallback
   try {
     return await captureWithDesktopCapturer()
-  } catch (e: any) {
-    errors.push(`desktopCapturer: ${e.message}`)
+  } catch (e) {
+    errors.push(`desktopCapturer: ${errorMessage(e)}`)
   }
 
   throw new Error(
@@ -90,7 +94,9 @@ async function captureWithDesktopCapturer(): Promise<string> {
     }
   })
 
-  const primarySource = sources[0]
+  // Source order isn't guaranteed to match display order, so match on display id.
+  const primarySource =
+    sources.find(source => source.display_id === String(primaryDisplay.id)) ?? sources[0]
   if (!primarySource) {
     throw new Error('No screen source found')
   }

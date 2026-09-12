@@ -1,5 +1,5 @@
 import { useState, useImperativeHandle, forwardRef } from 'react'
-import { Plus, Save, X } from 'lucide-react'
+import { Plus, Save } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 export interface SystemPromptEditorHandle {

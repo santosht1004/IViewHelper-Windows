@@ -1,10 +1,11 @@
 import { create } from 'zustand'
-import type { SystemPrompt, STTProvider, ReasoningEffort, Provider } from '../lib/types'
+import type { AlibabaRegion, SystemPrompt, STTProvider, ReasoningEffort, Provider } from '../lib/types'
 
 interface SettingsState {
-  apiKey: string
-  apiKeys: Record<Provider, string>
+  hasApiKey: Record<Provider, boolean>
+  keyStorageEncrypted: boolean
   provider: Provider
+  alibabaRegion: AlibabaRegion
   model: string
   opacity: number
   fontSize: number
@@ -16,8 +17,9 @@ interface SettingsState {
   loaded: boolean
 
   loadSettings: () => Promise<void>
-  setApiKey: (key: string) => void
+  setApiKey: (key: string) => Promise<void>
   setProvider: (provider: Provider) => void
+  setAlibabaRegion: (region: AlibabaRegion) => void
   setModel: (model: string) => void
   setOpacity: (opacity: number) => void
   setFontSize: (size: number) => void
@@ -35,13 +37,15 @@ function applyFontSize(size: number) {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  apiKey: '',
-  apiKeys: {
-    openai: '',
-    groq: '',
-    gemini: ''
+  hasApiKey: {
+    openai: false,
+    groq: false,
+    gemini: false,
+    alibaba: false
   },
+  keyStorageEncrypted: true,
   provider: 'openai',
+  alibabaRegion: 'singapore',
   model: 'gpt-5.4',
   opacity: 0.95,
   fontSize: 14,
@@ -57,18 +61,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const prompts = await window.electronAPI.getSystemPrompts()
     const fontSize = settings.fontSize ?? 14
     applyFontSize(fontSize)
-    const currentProvider = (settings.provider ?? 'openai') as Provider
-    const savedApiKeys: Record<Provider, string> = {
-      openai: settings.apiKeys?.openai || (currentProvider === 'openai' ? settings.apiKey : ''),
-      groq: settings.apiKeys?.groq || (currentProvider === 'groq' ? settings.apiKey : ''),
-      gemini: settings.apiKeys?.gemini || (currentProvider === 'gemini' ? settings.apiKey : '')
-    }
-    const currentApiKey = savedApiKeys[currentProvider] || settings.apiKey || ''
 
     set({
-      apiKey: currentApiKey,
-      apiKeys: savedApiKeys,
-      provider: currentProvider,
+      hasApiKey: settings.hasApiKey,
+      keyStorageEncrypted: settings.keyStorageEncrypted,
+      provider: settings.provider,
+      alibabaRegion: settings.alibabaRegion,
       model: settings.model,
       opacity: settings.opacity,
       fontSize,
@@ -81,17 +79,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     window.electronAPI.setOpacity(settings.opacity)
   },
 
-  setApiKey: (key) => {
-    const currentProvider = get().provider
-    const updatedApiKeys = { ...get().apiKeys, [currentProvider]: key }
-    set({ apiKey: key, apiKeys: updatedApiKeys })
-    window.electronAPI.saveSettings({ apiKey: key, apiKeys: updatedApiKeys })
+  // The key is sent to the main process for encrypted storage and never kept in renderer state.
+  setApiKey: async (key) => {
+    const hasApiKey = await window.electronAPI.setApiKey(get().provider, key)
+    set({ hasApiKey })
   },
 
   setProvider: (provider) => {
-    const nextApiKey = get().apiKeys[provider] || ''
-    set({ provider, apiKey: nextApiKey })
-    window.electronAPI.saveSettings({ provider, apiKey: nextApiKey })
+    set({ provider })
+    window.electronAPI.saveSettings({ provider })
+  },
+
+  setAlibabaRegion: (alibabaRegion) => {
+    set({ alibabaRegion })
+    window.electronAPI.saveSettings({ alibabaRegion })
   },
 
   setModel: (model) => {
