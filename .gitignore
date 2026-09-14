@@ -1,8 +1,17 @@
 node_modules/
 out/
 dist/
+release/
 .env
+.env.*
 *.dmg
 *.exe
 *.nsis
+*.log
+npm-debug.log*
 .DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+coverage/
