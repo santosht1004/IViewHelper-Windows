@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin({ exclude: ['@interviewhelper/shared'] })]
   },
   preload: {
     plugins: [externalizeDepsPlugin()]

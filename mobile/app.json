@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "InterviewHelper",
+    "slug": "interviewhelper",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dataintelo.interviewhelper",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Used to record your voice for speech-to-text transcription.",
+        "NSPhotoLibraryUsageDescription": "Used to attach images for the AI to analyze."
+      }
+    },
+    "android": {
+      "package": "com.dataintelo.interviewhelper",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f1218",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["RECORD_AUDIO", "READ_MEDIA_IMAGES"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Used to record your voice for speech-to-text transcription."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Used to attach images for the AI to analyze."
+        }
+      ]
+    ]
+  }
+}

@@ -1,17 +1,10 @@
+import type { ContentPart, ChatMessagePayload, ReasoningEffort } from '@interviewhelper/shared'
+export { REASONING_EFFORTS, modelSupportsReasoning } from '@interviewhelper/shared'
+export type { ContentPart, ChatMessagePayload, ReasoningEffort }
+
+// Mobile only supports the providers with a fetch-based streaming client (see src/api).
 export const PROVIDERS = ['openai', 'gemini'] as const
 export type Provider = (typeof PROVIDERS)[number]
-
-export const REASONING_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high'] as const
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
-
-export type ContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } }
-
-export interface ChatMessagePayload {
-  role: 'user' | 'assistant'
-  content: string | ContentPart[]
-}
 
 export interface Message {
   id: string
@@ -27,10 +20,6 @@ export interface ChatRequest {
   systemPrompt: string
   provider: Provider
   reasoningEffort: ReasoningEffort
-}
-
-export function modelSupportsReasoning(model: string): boolean {
-  return /^(o\d|gpt-5|gemini-3|gemini-2\.5|gemini-2\.0-flash-thinking)/.test(model)
 }
 
 export const DEFAULT_MODEL: Record<Provider, string> = {

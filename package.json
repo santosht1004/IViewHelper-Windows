@@ -1,0 +1,23 @@
+{
+  "name": "interviewhelper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InterviewHelper monorepo: Electron desktop app, Expo mobile app, and shared code.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/desktop",
+    "build": "npm run build --workspace=apps/desktop",
+    "typecheck": "npm run typecheck --workspace=apps/desktop",
+    "lint": "npm run lint --workspace=apps/desktop",
+    "test": "npm run test --workspace=apps/desktop",
+    "package:win": "npm run package:win --workspace=apps/desktop",
+    "package:mac": "npm run package:mac --workspace=apps/desktop",
+    "package:linux": "npm run package:linux --workspace=apps/desktop",
+    "mobile:start": "npm run start --workspace=apps/mobile",
+    "mobile:android": "npm run android --workspace=apps/mobile",
+    "mobile:ios": "npm run ios --workspace=apps/mobile"
+  }
+}
